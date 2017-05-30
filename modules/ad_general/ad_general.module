@@ -1,0 +1,87 @@
+<?php
+use Drupal\node\NodeInterface;
+use \Drupal\Core\Entity\ContentEntityInterface; 
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Component\Utility\SafeMarkup;
+use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\Component\Utility\Html;
+
+
+function ad_general_node_insert(NodeInterface $node1) {
+	$nid = $node1->id();
+	$node = node_load($nid);
+	if($node->getType() == 'company'){
+		if(!$node->get('field_website')->getString()){
+			drupal_set_message('Please consider adding a website for your company. It’s not mandatory, but it’s a good way of showing people what you do.');
+		}
+	}
+}
+
+function ad_general_form_alter(&$form, &$form_state, $form_id){
+  if($form_id == 'node_company_form'){
+  	$form['#validate'][] = 'ad_general_node_form_validate';
+  }
+  if($form_id == 'send_email_form'){
+  	$form['#validate'][] = 'ad_general_node_form_validate';
+  	//$form['#submit'][] = 'ad_general_send_mail';
+  }
+} 
+
+function ad_general_node_form_validate(&$form, &$form_state) {
+	if(strpos($form_state->getValue('email'), 'no-replay') !== false){
+		$form_state->setErrorByName('field_company_contact_email', t('Please enter a valid response email!'));
+	}
+	if (!valid_email_address($form_state->getValue('email'))) {
+		$form_state->setErrorByName('email', t('Enter a valid email address'));
+	}
+}
+
+function ad_general_send_mail(&$form, &$form_state){
+	$current_path = \Drupal::service('path.current')->getPath();
+	$path_args = explode('/', $current_path);
+	$node = node_load($path_args[2]);
+
+	$mailManager = \Drupal::service('plugin.manager.mail');
+	$module = 'ad_general';
+	$key = 'ad_general_email';
+	$to = $form_state->getValue('email');
+
+	$names = [];
+	foreach ($node->field_organizer as $item) {
+	  if ($item->entity) {
+	    $names[$item->entity->id()] = $item->entity->label();
+	  }
+	}
+
+	$params['event_title'] = $node->get('title')->getString();
+	$params['company_name'] = $names[$item->entity->id()];
+	$params['event_url'] = \Drupal::request()->getSchemeAndHttpHost().$_SERVER['REQUEST_URI'];
+	$params['name'] = $form_state->getValue('name');
+
+	$langcode = \Drupal::currentUser()->getPreferredLangcode();
+	$send = true;
+
+	$result = $mailManager->mail($module, $key, $to, $langcode, $params, NULL, $send);
+
+	if ($result['result'] !== true) {
+		$message = t('There was a problem sending your email');
+		drupal_set_message($message, 'error');
+		\Drupal::logger('d8mail')->error($message);
+		return;
+	}
+
+	$message = t('The mail has been sent successfully');
+	drupal_set_message($message);
+	\Drupal::logger('ad_general_mail')->notice($message);
+}
+
+function ad_general_mail($key, &$message, $params){
+    switch ($key){
+        case 'ad_general_email': 
+        	$message['from'] = \Drupal::config('system.site')->get('mail');
+            $message['subject'] = $params['name'].' '.'invited you to'.' '.$params['event_title'];
+            $message['body'][] = 'Check out this event by '.$params['company_name'].'!';
+            $message['body'][] = $params['event_url'];
+            break;
+    }
+}
